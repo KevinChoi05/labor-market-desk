@@ -8,7 +8,7 @@ const SYSTEM_PREFIX = "You are a labor-market analyst answering questions about 
 const MAX_MESSAGES = 40;
 const MAX_CHARS = 60000;      // whole request, system prompt included
 const MAX_QUESTION = 1000;    // any single user message
-const MAX_TOKENS = 900;
+const MAX_TOKENS = 2000;  // includes the model's internal reasoning
 
 // The only tool the model may call. The page runs it against its own BLS data.
 const TOOLS = [{
@@ -73,10 +73,16 @@ export default {
     const problem = validate(body);
     if (problem) return json({ error: problem }, 400, headers);
 
+    const key = (env.OPENROUTER_API_KEY || "").trim();
+    if (!key.startsWith("sk-or-")) {
+      console.log("OPENROUTER_API_KEY looks wrong:", { length: key.length, startsWithSkOr: false });
+      return json({ error: "The chat isn't configured yet. The charts and tables still work." }, 503, headers);
+    }
+
     const upstream = await fetch(OPENROUTER_URL, {
       method: "POST",
       headers: {
-        "Authorization": `Bearer ${env.OPENROUTER_API_KEY}`,
+        "Authorization": `Bearer ${key}`,
         "Content-Type": "application/json",
         "HTTP-Referer": "https://kevinchoi05.github.io/labor-market-desk/",
         "X-Title": "Labor Market Desk",
@@ -99,6 +105,7 @@ export default {
       return json({ error: msg }, status, headers);
     }
     const choice = data.choices[0];
-    return json({ message: choice.message, finish_reason: choice.finish_reason, model: data.model }, 200, headers);
+    const { content, tool_calls } = choice.message || {};
+    return json({ message: { role: "assistant", content: content || "", tool_calls }, finish_reason: choice.finish_reason, model: data.model }, 200, headers);
   },
 };

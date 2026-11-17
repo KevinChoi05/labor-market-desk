@@ -13,10 +13,11 @@ answers questions using only those numbers.
 - **States:** tile map of unemployment or 12-month job growth for all 50 states + DC;
   click a state to compare it with the U.S.
 - **Jobs and pay:** employment and pay range for 30 common occupations.
-- **Chatbot:** uses the claude.ai artifact `sample` capability, with a
-  `get_series` tool so answers cite real months and series IDs. It only works
-  when the page is opened as a claude.ai artifact; elsewhere the dashboard
-  still works and the chat says it is unavailable.
+- **Chatbot:** answers only from the page's data, with a `get_series` tool so
+  answers cite real months and series IDs. On claude.ai it uses the artifact's
+  built-in Claude access; on the public site it goes through `worker/`, a
+  Cloudflare Worker that calls OpenRouter (Claude Haiku 5.5) with the key kept
+  server-side, an origin check, per-IP rate limit and token cap.
 
 ## Data
 
@@ -55,3 +56,15 @@ python3 scripts/build.py
 ```
 
 Then open `index.html`, or republish it as a claude.ai artifact.
+
+## Chat backend (worker/)
+
+```sh
+cd worker
+npx wrangler login
+npx wrangler secret put OPENROUTER_API_KEY   # set a credit limit on this key in OpenRouter
+npx wrangler deploy
+```
+
+Put the deployed URL in `worker/chat_url.txt` and rebuild. Change the model in
+`worker/wrangler.toml` (`MODEL`). Logs: `npx wrangler tail`.
