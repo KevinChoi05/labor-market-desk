@@ -1,0 +1,42 @@
+name: Refresh BLS data
+
+on:
+  schedule:
+    # Every Saturday 14:00 UTC: after the Friday jobs report, Tuesday JOLTS and mid-month CPI
+    - cron: "0 14 * * 6"
+  workflow_dispatch: {}
+
+permissions:
+  contents: write
+
+concurrency:
+  group: refresh-data
+  cancel-in-progress: false
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download latest BLS data
+        env:
+          BLS_API_KEY: ${{ secrets.BLS_API_KEY }}  # optional; raises API limits
+        run: python3 scripts/fetch_bls.py
+
+      - name: Rebuild page and commit if the data changed
+        run: |
+          if git diff --quiet -- data/; then
+            echo "No new BLS data this week."
+            exit 0
+          fi
+          python3 scripts/build.py
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add data/ index.html
+          git commit -m "Refresh BLS data ($(date -u +%Y-%m-%d))"
+          git push
