@@ -19,6 +19,8 @@ NATIONAL = [
     # Household survey (CPS)
     "LNS14000000", "LNS13000000", "LNS11300000", "LNS12300060", "LNS13008636",
     "LNS14027662", "LNS14027660", "LNS14024887",
+    # Young workers (BLS has no internship data; these are the closest proxies)
+    "LNS14000012", "LNS14000036", "LNS12300012", "LNS12300036", "LNS11300012", "LNS11300036",
     # Establishment survey (CES)
     "CES0000000001", "CES0500000003",
     "CES1000000001", "CES2000000001", "CES3000000001", "CES4200000001", "CES4300000001",
@@ -128,6 +130,62 @@ def monthly(ids, start, end):
     return out
 
 
+# ---- sanity checks: fail the run (and the GitHub Action) instead of saving bad data ----
+# Most recent month each source should have, in days of lag (BLS release schedule + slack).
+MAX_LAG_DAYS = {"LNS": 70, "CES": 70, "CUU": 70, "JTS": 105, "LAS": 100, "SMS": 100}
+# Largest believable one-month move outside the 2020 shutdown months.
+MAX_JUMP = {"rate": 2.0, "level_pct": 3.0}
+# Small survey samples (teens, young adults) swing several points month to month.
+NOISY_RATE_LIMIT = {"LNS14000012": 5.0, "LNS14000036": 4.0, "LNS14024887": 4.0,
+                    "LNS12300012": 5.0, "LNS11300012": 5.0, "LNS12300036": 4.0, "LNS11300036": 4.0}
+
+
+def month_age_days(m):
+    y, mo = map(int, m.split("-"))
+    return (date.today() - date(y, mo, 1)).days
+
+
+def check_series(sid, pts, problems):
+    vals = [(m, v) for m, v in pts if v is not None]
+    if len(vals) < 12:
+        problems.append(f"{sid}: only {len(vals)} months of data")
+        return
+    last_m = vals[-1][0]
+    lag = MAX_LAG_DAYS.get(sid[:3], 100)
+    if month_age_days(last_m) > lag:
+        problems.append(f"{sid}: latest month {last_m} is older than {lag} days")
+    for (m0, a), (m1, b) in zip(vals, vals[1:]):
+        if "2020-03" <= m1 <= "2020-07":
+            continue
+        if month_age_days(m1) > 400:   # only check the last ~13 months; older data was already checked
+            continue
+        is_rate = abs(a) < 100 and not sid.startswith(("CES", "SMS", "JTS000000000000000JOL", "JTS000000000000000LDL", "CUU", "LNS13"))
+        if is_rate and abs(b - a) > NOISY_RATE_LIMIT.get(sid, MAX_JUMP["rate"]):
+            problems.append(f"{sid}: jumps {a} -> {b} between {m0} and {m1}")
+        elif not is_rate and a and abs(b / a - 1) * 100 > MAX_JUMP["level_pct"] and not sid.startswith(("JTS", "LNS13")):
+            problems.append(f"{sid}: changes {abs(b / a - 1) * 100:.1f}% between {m0} and {m1}")
+
+
+def validate(national, states, occ_rows):
+    problems = []
+    for sid, pts in national.items():
+        check_series(sid, pts, problems)
+    for code, st in states.items():
+        check_series(STATE_UR.format(st["fips"]), st["ur"], problems)
+        check_series(STATE_JOBS.format(st["fips"]), st["jobs"], problems)
+    if len(occ_rows) < len(OCCUPATIONS) - 3:
+        problems.append(f"occupations: only {len(occ_rows)} of {len(OCCUPATIONS)} returned data")
+    for r in occ_rows:
+        if r.get("median") is not None and not 15000 < r["median"] < 400000:
+            problems.append(f"occupation {r['soc']}: median pay {r['median']} looks wrong")
+    if problems:
+        print("Data checks failed; nothing was saved:", file=sys.stderr)
+        for p in problems:
+            print("  - " + p, file=sys.stderr)
+        raise SystemExit(1)
+    print("Data checks passed.")
+
+
 def save(name, obj):
     with open(os.path.join(DATA, name), "w") as f:
         json.dump(obj, f, separators=(",", ":"))
@@ -138,14 +196,14 @@ def main():
     end = date.today().year
     start = max(2019, end - (19 if KEY else 9))
 
-    save("bls.json", monthly(NATIONAL, start, end))
+    national = monthly(NATIONAL, start, end)
 
     ur = monthly([STATE_UR.format(f) for f in STATES], start, end)
     jobs = monthly([STATE_JOBS.format(f) for f in STATES], start, end)
-    save("states.json", {
+    states = {
         code: {"name": name, "fips": f, "ur": ur[STATE_UR.format(f)], "jobs": jobs[STATE_JOBS.format(f)]}
         for f, (code, name) in STATES.items()
-    })
+    }
 
     ids = [f"OEUN0000000000000{soc}{t}" for soc in OCCUPATIONS for t in OCC_TYPES]
     occ, year = {}, None
@@ -164,8 +222,18 @@ def main():
             print(f"  skipping {soc} {name}: no OEWS data", file=sys.stderr)
             continue
         rows.append({"soc": f"{soc[:2]}-{soc[2:]}", "name": name, "group": group, **v})
+
+    validate(national, states, rows)
+    save("bls.json", national)
+    save("states.json", states)
     save("occupations.json", {"year": year, "period": f"May {year}", "rows": rows})
 
 
+def check_saved():
+    """Run the data checks on the files already in data/ (no API calls)."""
+    load = lambda n: json.load(open(os.path.join(DATA, n)))
+    validate(load("bls.json"), load("states.json"), load("occupations.json")["rows"])
+
+
 if __name__ == "__main__":
-    main()
+    check_saved() if "--check-only" in sys.argv else main()

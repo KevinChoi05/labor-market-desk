@@ -92,6 +92,7 @@ export default {
         messages: body.messages,
         tools: TOOLS,
         max_tokens: MAX_TOKENS,
+        usage: { include: true },   // OpenRouter adds token counts and cost to the response
       }),
     });
 
@@ -105,6 +106,19 @@ export default {
       return json({ error: msg }, status, headers);
     }
     const choice = data.choices[0];
+    // One line per model call; view with `npx wrangler tail` or in the dashboard (Workers > Logs).
+    // No IPs or question text are logged.
+    const u = data.usage || {};
+    console.log(JSON.stringify({
+      event: "chat_call",
+      day: new Date().toISOString().slice(0, 10),
+      new_question: body.messages[body.messages.length - 1].role === "user",
+      tool_calls: choice.message?.tool_calls?.length || 0,
+      finish: choice.finish_reason,
+      prompt_tokens: u.prompt_tokens, completion_tokens: u.completion_tokens,
+      cost_usd: u.cost,
+      model: data.model,
+    }));
     const { content, tool_calls } = choice.message || {};
     return json({ message: { role: "assistant", content: content || "", tool_calls }, finish_reason: choice.finish_reason, model: data.model }, 200, headers);
   },

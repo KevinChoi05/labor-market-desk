@@ -2,6 +2,11 @@ name = "labor-market-desk-chat"
 main = "src/index.js"
 compatibility_date = "2026-10-01"
 
+# Keep logs in the Cloudflare dashboard (Workers & Pages > labor-market-desk-chat > Logs)
+# so daily questions and spend can be queried.
+[observability]
+enabled = true
+
 [vars]
 # OpenRouter model id. Haiku 5.5 is about $0.001 per question; Sonnet 5.5 about $0.025.
 MODEL = "anthropic/claude-haiku-5.5"
