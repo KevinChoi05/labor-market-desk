@@ -1,0 +1,18 @@
+name = "labor-market-desk-chat"
+main = "src/index.js"
+compatibility_date = "2026-10-01"
+
+[vars]
+# OpenRouter model id. Haiku 5.5 is about $0.001 per question; Sonnet 5.5 about $0.025.
+MODEL = "anthropic/claude-haiku-5.5"
+# Sites allowed to call this worker (comma-separated). Local file testing uses "null".
+ALLOWED_ORIGINS = "https://kevinchoi05.github.io,http://localhost:8000,http://127.0.0.1:8000"
+
+# Per-visitor limit: 8 model calls per minute per IP (one question can take 2-3 calls).
+[[ratelimits]]
+name = "LIMITER"
+namespace_id = "1001"
+
+  [ratelimits.simple]
+  limit = 8
+  period = 60

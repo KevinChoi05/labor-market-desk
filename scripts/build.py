@@ -9,6 +9,10 @@ html = read("src", "template.html")
 for marker, name in [("/*DATA*/", "bls.json"), ("/*STATES*/", "states.json"), ("/*OCC*/", "occupations.json")]:
     assert marker in html, f"{marker} missing from template"
     html = html.replace(marker, read("data", name))
+# Chat backend for the standalone site (Cloudflare Worker URL); empty disables chat there.
+url_file = os.path.join(root, "worker", "chat_url.txt")
+chat_url = os.environ.get("CHAT_URL") or (open(url_file).read().strip() if os.path.exists(url_file) else "")
+html = html.replace("/*CHAT_URL*/", chat_url)
 today = date.today()
 html = html.replace('const RETRIEVED = "November 16, 2026";',
                     f'const RETRIEVED = "{today:%B} {today.day}, {today.year}";')

@@ -210,6 +210,8 @@ const RAW = /*DATA*/;
 const STATES = /*STATES*/;
 const OCC = /*OCC*/;
 const RETRIEVED = "November 16, 2026";
+// Chat backend outside claude.ai: a Cloudflare Worker that calls OpenRouter (see worker/).
+const CHAT_URL = "/*CHAT_URL*/";
 
 const META = {
   LNS14000000:{n:"Unemployment rate",u:"%",d:1,g:"Household survey"},
@@ -546,6 +548,39 @@ const addMsg = (cls, html) => { const d = document.createElement("div"); d.class
 
 const chatHistory = [];
 let samplePromise = null, busy = false;
+
+// Outside claude.ai: run the tool loop against the Worker (OpenAI-style messages).
+async function askWorker(question) {
+  const msgs = [{ role: "system", content: SYSTEM }, ...chatHistory, { role: "user", content: question }];
+  for (let round = 0; round < 5; round++) {
+    let r, d;
+    try {
+      r = await fetch(CHAT_URL, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ messages: msgs }) });
+      d = await r.json().catch(() => ({}));
+    } catch { throw { code: "worker", message: "Couldn't reach the chat service. Check your connection and try again." }; }
+    if (!r.ok) throw { code: r.status === 429 ? "rate_limited" : "worker", message: d.error || `The chat service returned an error (${r.status}).` };
+    const m = d.message || {};
+    if (m.tool_calls?.length && round < 4) {
+      msgs.push({ role: "assistant", content: m.content || "", tool_calls: m.tool_calls });
+      for (const tc of m.tool_calls) {
+        let out;
+        try { out = TOOLS[0].execute(JSON.parse(tc.function?.arguments || "{}")); } catch (e) { out = { error: "Bad tool input: " + (e?.message || e) }; }
+        msgs.push({ role: "tool", tool_call_id: tc.id, content: JSON.stringify(out) });
+      }
+      continue;
+    }
+    return { text: m.content || "" };
+  }
+  return { text: "" };
+}
+// On claude.ai: the artifact's built-in Claude access (sample capability).
+function askSample(sample, question, onText) {
+  const msgs = chatHistory.length
+    ? [{ role: "user", content: SYSTEM + "\n\nQuestion: " + chatHistory[0].content }, ...chatHistory.slice(1), { role: "user", content: question }]
+    : [{ role: "user", content: SYSTEM + "\n\nQuestion: " + question }];
+  return sample(msgs, { tools: TOOLS, cache: false, onText: ({ text }) => onText(text) });
+}
+
 async function ask(question) {
   if (busy) return;
   document.getElementById("sugg").hidden = true;
@@ -554,17 +589,18 @@ async function ask(question) {
   busy = true; send.disabled = true;
   const bot = addMsg("bot", `<span class="thinking">Looking at the data</span>`);
   try {
-    samplePromise = samplePromise || (window.claude?.use ? window.claude.use("sample") : Promise.resolve(null));
+    const onClaude = !!window.claude?.use;
+    samplePromise = samplePromise || (onClaude ? window.claude.use("sample") : Promise.resolve(null));
     const sample = await samplePromise;
-    if (!sample) { bot.className = "msg err"; bot.textContent = "The chat needs Claude, which isn't available in this view. Open the page on claude.ai while signed in to ask questions. The charts and tables still work."; return; }
-    const msgs = chatHistory.length
-      ? [{ role: "user", content: SYSTEM + "\n\nQuestion: " + chatHistory[0].content }, ...chatHistory.slice(1), { role: "user", content: question }]
-      : [{ role: "user", content: SYSTEM + "\n\nQuestion: " + question }];
+    const useWorker = !sample && !onClaude && CHAT_URL.startsWith("https://");
+    if (!sample && !useWorker) {
+      bot.className = "msg err";
+      bot.textContent = onClaude ? "Chat is turned off for this page. You can allow it from the artifact's Permissions menu." : "Chat isn't set up for this copy of the page. The charts and tables still work.";
+      return;
+    }
     toolLog = [];
-    const res = await sample(msgs, {
-      tools: TOOLS, cache: false,
-      onText: ({ text }) => { const { body } = splitChart(text); if (body.trim()) { bot.innerHTML = md(body); log.scrollTop = log.scrollHeight; } }
-    });
+    const stream = text => { const { body } = splitChart(text); if (body.trim()) { bot.innerHTML = md(body); log.scrollTop = log.scrollHeight; } };
+    const res = useWorker ? await askWorker(question) : await askSample(sample, question, stream);
     const { body, ids } = splitChart(res.text || "");
     bot.innerHTML = md(body) || "<p>I couldn't form an answer from the data. Try rephrasing the question.</p>";
     if (ids.length) {
@@ -579,7 +615,8 @@ async function ask(question) {
   } catch (err) {
     bot.className = "msg err";
     bot.textContent = err?.code === "not_granted" ? "Chat is turned off for this page. You can allow it from the artifact's Permissions menu."
-      : err?.code === "rate_limited" ? "Too many questions in a short time. Wait a minute and ask again."
+      : err?.code === "rate_limited" ? (err.message || "Too many questions in a short time. Wait a minute and ask again.")
+      : err?.code === "worker" ? err.message
       : "Something went wrong getting an answer (" + (err?.message || err?.code || "unknown error") + "). Try again.";
   } finally { busy = false; send.disabled = false; log.scrollTop = log.scrollHeight; }
 }
